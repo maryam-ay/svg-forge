@@ -67,6 +67,7 @@ export default function App() {
   const [svgContent, setSvgContent] = useState(null)
   const [converting, setConverting] = useState(false)
   const [error, setError] = useState(null)
+  const [retryMsg, setRetryMsg] = useState(null)
 
   const [settings, setSettings] = useState({
     preset: 'high',
@@ -90,29 +91,50 @@ export default function App() {
     if (!file || converting) return
     setConverting(true)
     setError(null)
+    setRetryMsg(null)
 
-    const form = new FormData()
-    form.append('file', file)
-    form.append('color_precision', settings.colorPrecision)
-    form.append('filter_speckle', settings.filterSpeckle)
-    form.append('corner_threshold', settings.cornerThreshold)
-    form.append('path_precision', settings.pathPrecision)
-    form.append('length_threshold', settings.lengthThreshold)
-    form.append('mode', settings.mode === 'bw' ? 'bw' : 'color')
+    const RETRY_DELAYS = [8000, 15000, 20000, 25000]
+    const MAX_RETRIES = RETRY_DELAYS.length
+    let lastError = null
 
-    try {
-      const res = await fetch('/convert', { method: 'POST', body: form })
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({ detail: 'Conversion failed' }))
-        throw new Error(data.detail || 'Conversion failed')
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0) {
+        setRetryMsg(`Waking up server… (attempt ${attempt}/${MAX_RETRIES})`)
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt - 1]))
       }
-      const svg = await res.text()
-      setSvgContent(svg)
-    } catch (err) {
-      setError(err.message)
-    } finally {
-      setConverting(false)
+
+      const form = new FormData()
+      form.append('file', file)
+      form.append('color_precision', settings.colorPrecision)
+      form.append('filter_speckle', settings.filterSpeckle)
+      form.append('corner_threshold', settings.cornerThreshold)
+      form.append('path_precision', settings.pathPrecision)
+      form.append('length_threshold', settings.lengthThreshold)
+      form.append('mode', settings.mode === 'bw' ? 'bw' : 'color')
+
+      try {
+        const res = await fetch(`${import.meta.env.VITE_API_BASE ?? ''}/convert`, { method: 'POST', body: form })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({ detail: 'Conversion failed' }))
+          const err = new Error(data.detail || 'Conversion failed')
+          err.status = res.status
+          throw err
+        }
+        const svg = await res.text()
+        setSvgContent(svg)
+        setRetryMsg(null)
+        setConverting(false)
+        return
+      } catch (err) {
+        lastError = err
+        const isRetryable = err instanceof TypeError || (err.status >= 500)
+        if (!isRetryable || attempt === MAX_RETRIES) break
+      }
     }
+
+    setError(lastError.message)
+    setRetryMsg(null)
+    setConverting(false)
   }
 
   const handleDownload = () => {
@@ -176,6 +198,13 @@ export default function App() {
               </>
             )}
           </button>
+        )}
+
+        {retryMsg && (
+          <div className="retry-banner" role="status">
+            <span className="spinner" />
+            {retryMsg}
+          </div>
         )}
 
         {error && (
