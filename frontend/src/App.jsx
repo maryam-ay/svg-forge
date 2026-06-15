@@ -97,16 +97,10 @@ export default function App() {
     setError(null)
     setRetryMsg(null)
 
-    const RETRY_INTERVAL = 10000
-    const MAX_RETRIES = 18  // 18 × 10s = 3 minutes
+    const MAX_RETRIES = 5
     let lastError = null
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      if (attempt > 0) {
-        setRetryMsg(`Server is waking up, this may take up to a minute on first use… (attempt ${attempt}/${MAX_RETRIES})`)
-        await new Promise(resolve => setTimeout(resolve, RETRY_INTERVAL))
-      }
-
       const form = new FormData()
       form.append('file', file)
       form.append('color_precision', settings.colorPrecision)
@@ -133,6 +127,8 @@ export default function App() {
         lastError = err
         const isRetryable = err instanceof TypeError || (err.status >= 500)
         if (!isRetryable || attempt === MAX_RETRIES) break
+        setRetryMsg(`Server is waking up, this may take up to a minute on first use… (attempt ${attempt + 1}/${MAX_RETRIES})`)
+        await new Promise(resolve => setTimeout(resolve, 10000))
       }
     }
 
