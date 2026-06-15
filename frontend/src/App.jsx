@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import DropZone from './components/DropZone.jsx'
 import Controls from './components/Controls.jsx'
 import Preview from './components/Preview.jsx'
@@ -79,6 +79,10 @@ export default function App() {
     mode: 'color',
   })
 
+  useEffect(() => {
+    fetch('https://svg-forge-backend.onrender.com/health').catch(() => {})
+  }, [])
+
   const handleFile = useCallback((newFile) => {
     if (originalUrl) URL.revokeObjectURL(originalUrl)
     setFile(newFile)
@@ -93,14 +97,14 @@ export default function App() {
     setError(null)
     setRetryMsg(null)
 
-    const RETRY_DELAYS = [8000, 15000, 20000, 25000]
-    const MAX_RETRIES = RETRY_DELAYS.length
+    const RETRY_INTERVAL = 10000
+    const MAX_RETRIES = 18  // 18 × 10s = 3 minutes
     let lastError = null
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       if (attempt > 0) {
-        setRetryMsg(`Waking up server… (attempt ${attempt}/${MAX_RETRIES})`)
-        await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt - 1]))
+        setRetryMsg(`Server is waking up, this may take up to a minute on first use… (attempt ${attempt}/${MAX_RETRIES})`)
+        await new Promise(resolve => setTimeout(resolve, RETRY_INTERVAL))
       }
 
       const form = new FormData()
