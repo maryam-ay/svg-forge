@@ -80,7 +80,7 @@ export default function App() {
   })
 
   useEffect(() => {
-    fetch('https://svg-forge-backend.onrender.com/health').catch(() => {})
+    fetch('https://svg-forge-backend.onrender.com/health', { method: 'GET' }).catch(() => {})
   }, [])
 
   const handleFile = useCallback((newFile) => {
