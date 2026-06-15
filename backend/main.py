@@ -1,7 +1,9 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
-import vtracer
+import subprocess
+import sys
+import json
 import tempfile
 import os
 import re
@@ -19,7 +21,8 @@ app.add_middleware(
 
 ALLOWED_TYPES = {"image/png", "image/jpeg", "image/webp"}
 MAX_FILE_SIZE = 2 * 1024 * 1024  # 2 MB
-MAX_DIMENSION = 800  # longest side cap before tracing
+MAX_DIMENSION = 512               # longest side cap — keeps vtracer under ~150 MB RAM
+MAX_COLOR_PRECISION = 6           # vtracer RAM scales exponentially with this value
 
 # ── SVG path post-processing ──────────────────────────────────────────────────
 
@@ -204,17 +207,44 @@ async def health():
 
 
 def cap_for_tracing(img: Image.Image) -> Image.Image:
-    """Downscale image so its longest side is at most MAX_DIMENSION pixels.
-
-    Keeps memory usage bounded for vtracer on Render's free tier.
-    Images already within the limit are returned unchanged.
-    """
     w, h = img.size
     longest = max(w, h)
     if longest <= MAX_DIMENSION:
         return img
     scale = MAX_DIMENSION / longest
     return img.resize((round(w * scale), round(h * scale)), Image.LANCZOS)
+
+
+def run_vtracer(tmp_png_path: str, tmp_svg_path: str, **kwargs) -> None:
+    """Run vtracer in a child process so a crash or OOM cannot kill the server."""
+    args = {'input_path': tmp_png_path, 'output_path': tmp_svg_path, **kwargs}
+    script = (
+        "import sys, json, vtracer; a = json.loads(sys.argv[1]); "
+        "vtracer.convert_image_to_svg_py(a.pop('input_path'), a.pop('output_path'), **a)"
+    )
+
+    preexec_fn = None
+    if sys.platform != 'win32':
+        try:
+            import resource as _res
+            def _limit():
+                # 400 MB address-space cap for the child process
+                cap = 400 * 1024 * 1024
+                _res.setrlimit(_res.RLIMIT_AS, (cap, cap))
+            preexec_fn = _limit
+        except ImportError:
+            pass
+
+    result = subprocess.run(
+        [sys.executable, '-c', script, json.dumps(args)],
+        capture_output=True,
+        timeout=120,
+        preexec_fn=preexec_fn,
+    )
+
+    if result.returncode != 0:
+        stderr = result.stderr.decode(errors='replace').strip()
+        raise RuntimeError(f"vtracer exited {result.returncode}: {stderr[:300]}")
 
 
 @app.post("/convert")
@@ -245,13 +275,7 @@ async def convert_image(
                 detail="File too large. Please upload an image under 2 MB.",
             )
 
-        # Normalise to PNG so vtracer always gets a consistent format.
-        # This also transparently handles WebP and CMYK JPEGs.
-        img = Image.open(BytesIO(content))
-        if img.mode not in ("RGB", "RGBA"):
-            img = img.convert("RGBA")
-
-        # Cap dimensions to keep vtracer memory usage within Render's free-tier limits.
+        img = Image.open(BytesIO(content)).convert("RGB")
         img = cap_for_tracing(img)
 
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
@@ -260,16 +284,14 @@ async def convert_image(
 
         tmp_svg_path = tmp_png_path + ".svg"
 
-        colormode = "color" if mode == "color" else "binary"
-
-        vtracer.convert_image_to_svg_py(
+        run_vtracer(
             tmp_png_path,
             tmp_svg_path,
-            colormode=colormode,
+            colormode="color" if mode == "color" else "binary",
             hierarchical="stacked",
             mode="spline",
             filter_speckle=max(1, min(32, filter_speckle)),
-            color_precision=max(1, min(8, color_precision)),
+            color_precision=max(1, min(MAX_COLOR_PRECISION, color_precision)),
             layer_difference=16,
             corner_threshold=max(1, min(180, corner_threshold)),
             length_threshold=max(0.5, min(10.0, length_threshold)),
