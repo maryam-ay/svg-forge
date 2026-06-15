@@ -113,7 +113,7 @@ export default function App() {
       form.append('mode', settings.mode === 'bw' ? 'bw' : 'color')
 
       try {
-        const res = await fetch(`${import.meta.env.VITE_API_BASE ?? ''}/convert`, { method: 'POST', body: form })
+        const res = await fetch('https://svg-forge-backend.onrender.com/convert', { method: 'POST', body: form })
         if (!res.ok) {
           const data = await res.json().catch(() => ({ detail: 'Conversion failed' }))
           const err = new Error(data.detail || 'Conversion failed')
