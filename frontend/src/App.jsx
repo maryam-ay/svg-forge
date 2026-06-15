@@ -93,6 +93,10 @@ export default function App() {
 
   const handleConvert = async () => {
     if (!file || converting) return
+    if (file.size > 2 * 1024 * 1024) {
+      setError('File too large. Please upload an image under 2 MB.')
+      return
+    }
     setConverting(true)
     setError(null)
     setRetryMsg(null)

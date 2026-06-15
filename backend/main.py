@@ -18,6 +18,8 @@ app.add_middleware(
 )
 
 ALLOWED_TYPES = {"image/png", "image/jpeg", "image/webp"}
+MAX_FILE_SIZE = 2 * 1024 * 1024  # 2 MB
+MAX_DIMENSION = 800  # longest side cap before tracing
 
 # ── SVG path post-processing ──────────────────────────────────────────────────
 
@@ -201,21 +203,17 @@ async def health():
     return {"status": "ok"}
 
 
-MIN_TRACE_SIZE = 1024  # upscale shortest/longest side to at least this many px
+def cap_for_tracing(img: Image.Image) -> Image.Image:
+    """Downscale image so its longest side is at most MAX_DIMENSION pixels.
 
-
-def upscale_for_tracing(img: Image.Image) -> Image.Image:
-    """Upscale image so its longest side is at least MIN_TRACE_SIZE pixels.
-
-    Larger pixel grids give vtracer more detail to trace, which dramatically
-    improves quality for small logos, icons, and text. Images already larger
-    than MIN_TRACE_SIZE are returned unchanged.
+    Keeps memory usage bounded for vtracer on Render's free tier.
+    Images already within the limit are returned unchanged.
     """
     w, h = img.size
     longest = max(w, h)
-    if longest >= MIN_TRACE_SIZE:
+    if longest <= MAX_DIMENSION:
         return img
-    scale = MIN_TRACE_SIZE / longest
+    scale = MAX_DIMENSION / longest
     return img.resize((round(w * scale), round(h * scale)), Image.LANCZOS)
 
 
@@ -241,14 +239,20 @@ async def convert_image(
     try:
         content = await file.read()
 
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail="File too large. Please upload an image under 2 MB.",
+            )
+
         # Normalise to PNG so vtracer always gets a consistent format.
         # This also transparently handles WebP and CMYK JPEGs.
         img = Image.open(BytesIO(content))
         if img.mode not in ("RGB", "RGBA"):
             img = img.convert("RGBA")
 
-        # Upscale small images so vtracer has more pixel detail to trace.
-        img = upscale_for_tracing(img)
+        # Cap dimensions to keep vtracer memory usage within Render's free-tier limits.
+        img = cap_for_tracing(img)
 
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
             img.save(f, format="PNG")
